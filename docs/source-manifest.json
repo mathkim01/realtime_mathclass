@@ -1,0 +1,33 @@
+{
+  "sourceDirectory": "C:\\Users\\user\\Documents\\ChatGPT\\실시간 수학 문제풀이 앱",
+  "files": [
+    {
+      "file": "Code.gs",
+      "sha256": "6127b4292c5e47f37247f12daf450f1d45aa89788f8d33db27f91fb286015e47"
+    },
+    {
+      "file": "index.html",
+      "sha256": "feeaa97bba6d8be6b324cb56884b934ae6fc76cbabb6ef6edb28084d0e142680"
+    },
+    {
+      "file": "problemsData.html",
+      "sha256": "3f1873eacbb4492f34c94a6755fcae789e9399d86bb78c440c9b573e3ca25db2"
+    },
+    {
+      "file": "problemsData.js",
+      "sha256": "60d02be5a4712af491a44894ab9ba4d6113c8dced717c929c4ab75c872b4961f"
+    },
+    {
+      "file": "conceptData.html",
+      "sha256": "36ae1cd94fef0e98fab400ca2e44e2ab6338a35436c5899eda093ae3cbffd0d1"
+    },
+    {
+      "file": "conceptLearning.html",
+      "sha256": "aacbf46e7b6d3948e9170b32329da0cc9686fe0a055aba3cfd2f7d9d218e0782"
+    },
+    {
+      "file": "unit1_q13_factory_map.html",
+      "sha256": "1c34526aea4903f623936cb1ba05c359c616a8dc58eedfe0e5a3f48c48bd3a92"
+    }
+  ]
+}

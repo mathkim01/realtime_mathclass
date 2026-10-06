@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="720" viewBox="0 0 520 360" role="img" aria-labelledby="title desc" style="display:block; width:100%; height:100%;">
+  <title id="title">두 부품 공장과 x축 도로의 위치</title>
+  <desc id="desc">좌표평면 위의 A(0, 6), B(18, 3)과 x축을 따라 놓인 직선 도로</desc>
+  <defs>
+    <pattern id="grid" width="20" height="30" patternUnits="userSpaceOnUse">
+      <path d="M 20 0 L 0 0 0 30" fill="none" stroke="#dbeafe" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#1e3a8a" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="520" height="360" rx="18" fill="#f8fbff"/>
+  <rect x="70" y="40" width="410" height="270" fill="url(#grid)"/>
+
+  <!-- x축 도로 -->
+  <line x1="70" y1="280" x2="480" y2="280" stroke="#d97706" stroke-width="14" stroke-linecap="round"/>
+  <line x1="70" y1="280" x2="480" y2="280" stroke="#fbbf24" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- 좌표축 -->
+  <line x1="65" y1="280" x2="492" y2="280" stroke="#334155" stroke-width="2"/>
+  <path d="M 492 280 L 482 274 L 482 286 Z" fill="#334155"/>
+  <line x1="90" y1="315" x2="90" y2="28" stroke="#334155" stroke-width="2"/>
+  <path d="M 90 28 L 84 38 L 96 38 Z" fill="#334155"/>
+  <text x="497" y="286" font-family="Arial, sans-serif" font-size="15" fill="#334155">x</text>
+  <text x="84" y="25" font-family="Arial, sans-serif" font-size="15" fill="#334155">y</text>
+
+  <!-- 눈금과 좌표 라벨 -->
+  <g font-family="Arial, sans-serif" font-size="12" fill="#64748b" text-anchor="middle">
+    <text x="90" y="299">0</text>
+    <text x="130" y="299">2</text>
+    <text x="170" y="299">4</text>
+    <text x="210" y="299">6</text>
+    <text x="250" y="299">8</text>
+    <text x="290" y="299">10</text>
+    <text x="330" y="299">12</text>
+    <text x="370" y="299">14</text>
+    <text x="410" y="299">16</text>
+    <text x="450" y="299">18</text>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="12" fill="#64748b" text-anchor="end">
+    <text x="81" y="254">1</text>
+    <text x="81" y="224">2</text>
+    <text x="81" y="194">3</text>
+    <text x="81" y="164">4</text>
+    <text x="81" y="134">5</text>
+    <text x="81" y="104">6</text>
+  </g>
+
+  <!-- A 공장: (0, 6) -->
+  <g filter="url(#shadow)">
+    <circle cx="90" cy="100" r="10" fill="#2563eb" stroke="#ffffff" stroke-width="4"/>
+    <path d="M 100 100 L 132 76" stroke="#2563eb" stroke-width="2"/>
+    <rect x="132" y="54" width="112" height="42" rx="9" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="142" y="72" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#1e3a8a">부품 공장 A</text>
+    <text x="142" y="88" font-family="Arial, sans-serif" font-size="13" fill="#1e40af">A(0, 6)</text>
+  </g>
+
+  <!-- B 공장: (18, 3) -->
+  <g filter="url(#shadow)">
+    <circle cx="450" cy="190" r="10" fill="#db2777" stroke="#ffffff" stroke-width="4"/>
+    <path d="M 440 190 L 408 166" stroke="#db2777" stroke-width="2"/>
+    <rect x="276" y="144" width="122" height="42" rx="9" fill="#fdf2f8" stroke="#f9a8d4"/>
+    <text x="286" y="162" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#9d174d">부품 공장 B</text>
+    <text x="286" y="178" font-family="Arial, sans-serif" font-size="13" fill="#be185d">B(18, 3)</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="326" y="246" width="118" height="26" rx="13" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="385" y="264" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#9a3412">직선 도로 (x축)</text>
+  </g>
+</svg>
