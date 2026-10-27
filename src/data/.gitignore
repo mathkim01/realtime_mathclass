@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.vercel/
+playwright-report/
+test-results/
+*.log
+**/명제_문제은행.json
+**/*_정답_수파베이스_비공개*.sql
