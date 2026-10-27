@@ -1,13 +1,24 @@
 import React from 'react';
 import { backend } from './lib/backend';
-import { problemsData } from './data/problems';
+import { problemSetId, problemsData } from './data/proposition-problems';
 import { conceptLearningData } from './data/concepts';
 import MathText from './components/MathText';
-import ConceptLearning from './components/ConceptLearning';
+import PropositionConceptLearning from './components/PropositionConceptLearning';
+import ProblemBlankActivity from './components/ProblemBlankActivity';
 import Notifications from './components/Notifications';
-import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
+import { downloadResultsCsv } from './lib/results-csv';
+import { answerStorageKey, submissionStorageKey, clearStudentAnswerCache } from './lib/student-storage';
+import { isProblemComplete, selectedChoiceLabel } from './lib/problem-bank';
+const activityGuide = [
+  { title: '수업 준비물', body: '교과서(또는 빈 종이), 필기구, 모바일 기기(또는 태블릿)를 준비해주세요.' },
+  { title: '답변 방식', body: '각 문제에서 4지선다 답을 고르고, 질문과 답·답·아이디어와 답 중 하나를 선택합니다. 질문과 풀이 아이디어도 공유할 수 있습니다.' },
+  { title: '풀이 빈칸', body: '풀이 과정의 빈칸을 모두 채워야 해당 문항이 완료로 표시됩니다. 빈칸 내용은 자동 채점하지 않고 선택한 답만 채점합니다.' },
+  { title: '문항 이동과 제출', body: '문항 번호를 누르면 해당 문제로 이동합니다. 모든 문항을 풀도록 노력한 뒤 최종 답안 제출 버튼을 눌러주세요. 미응답 문항도 제출할 수 있지만 오답 처리됩니다. 제출 마감 전에는 수정 이유를 적고 재제출할 수 있습니다.' },
+];
     export default function App() {
       const [studentName, setStudentName] = React.useState('');
+      const [studentIdentity, setStudentIdentity] = React.useState({ grade: '', classNumber: '', studentNumber: '' });
+      const [guideChecks, setGuideChecks] = React.useState([false, false, false, false]);
       const [inputCode, setInputCode] = React.useState('');
       const [sessionCode, setSessionCode] = React.useState('');
       const [isLoggedIn, setIsLoggedIn] = React.useState(false);
@@ -16,7 +27,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       const [userAnswers, setUserAnswers] = React.useState({});
 
       const [dashboard, setDashboard] = React.useState({ students: [], ideas: [], questions: [], submissions: [], problemProgress: [], activeSessionCode: '', isSessionActive: false, isSubmissionClosed: false, announcement: '', announcementTime: '' });
-      const [showHint, setShowHint] = React.useState(false);
+      const [showHint, setShowHint] = React.useState(true);
       const [enlargedImg, setEnlargedImg] = React.useState(null);
       const [cooldown, setCooldown] = React.useState(false);
 
@@ -33,6 +44,8 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       const dashboardRequest = React.useRef(0);
       const alive = React.useRef(true);
       const [announcementDraft, setAnnouncementDraft] = React.useState('');
+      const [announcementPopup, setAnnouncementPopup] = React.useState(null);
+      const [classSessions, setClassSessions] = React.useState([]);
 
       // 최종 제출 및 정오표 / 수정 사유 상태
       const [hasSubmitted, setHasSubmitted] = React.useState(false);
@@ -44,9 +57,6 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       // 커스텀 알림 및 확인 모달 상태
       const [toast, setToast] = React.useState(null);
       const [confirmDialog, setConfirmDialog] = React.useState(null);
-
-      const answerStorageKey = (name, code) => `ans_${code}_${name}`;
-      const submissionStorageKey = (name, code) => `submitted_${code}_${name}`;
 
       // 학생 중복 표시 방지를 위한 유일 학생 추출 함수
       const getUniqueStudents = (studentsArr) => {
@@ -69,20 +79,8 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       const safeSubmissions = Array.isArray(dashboard?.submissions) ? dashboard.submissions : [];
 
       const currentProblem = problemsData[selectedIndex] || problemsData[0];
-      const getInlineImageMarkup = (imageId) => imageId === 'unit1-q13-factory-map' ? factoryMap : '';
+      const getInlineImageMarkup = () => '';
       const currentProblemImageMarkup = getInlineImageMarkup(currentProblem.image);
-
-      // MathJax 수식 안의 밑줄은 아래첨자로 해석되므로, 빈칸을 수식용 밑줄로 바꿉니다.
-      // 일반 문장 속 빈칸은 전각 밑줄을 사용해 어느 환경에서도 보이게 합니다.
-      const formatHintText = (hintText) => {
-        if (!hintText) return '';
-        return String(hintText)
-          .split(/(\$[^$]*\$)/g)
-          .map(part => part.startsWith('$') && part.endsWith('$')
-            ? part.replace(/____/g, '\\underline{\\qquad}')
-            : part.replace(/____/g, '＿＿＿＿'))
-          .join('');
-      };
 
       const showToastMessage = (message, type = 'info') => {
         setToast({ message, type });
@@ -119,6 +117,18 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
           }
         } catch (error) { reportError(error); }
       };
+      const loadClassSessions = async () => {
+        try { setClassSessions(await backend.listSessions()); }
+        catch (error) { reportError(error); }
+      };
+      React.useEffect(() => {
+        if (!isLoggedIn || isTeacher || !sessionCode || !dashboard.announcement || !dashboard.announcementAt) return;
+        const key = `${sessionCode}:${dashboard.announcementAt}`;
+        const storageKey = `math-classroom:seen-announcement:${sessionCode}`;
+        if (sessionStorage.getItem(storageKey) !== key && announcementPopup?.key !== key) {
+          setAnnouncementPopup({ key, storageKey, message: dashboard.announcement });
+        }
+      }, [isLoggedIn, isTeacher, sessionCode, dashboard.announcement, dashboard.announcementAt, announcementPopup?.key]);
       React.useEffect(() => {
         alive.current = true;
         let unsubscribe = () => {};
@@ -126,7 +136,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
           try {
             const context = await backend.restoreContext();
             if (!alive.current) return;
-            if (context?.role === 'teacher') setIsTeacher(true);
+            if (context?.role === 'teacher') { setIsTeacher(true); await loadClassSessions(); }
             if (context?.participant) {
               restoreStudent(context.participant, context.answers, context.submission);
             } else {
@@ -143,6 +153,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
 
       const handleSessionTerminated = (reason) => {
         clearTimeout(draftTimer.current);
+        clearStudentAnswerCache(localStorage, sessionStorage.getItem('student_name') || studentName, sessionStorage.getItem('session_code') || sessionCode);
         sessionStorage.removeItem('student_name');
         sessionStorage.removeItem('session_code');
         backend.leaveClass();
@@ -153,6 +164,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
         answersRef.current = {};
         setHasSubmitted(false);
         setSelectedIndex(0);
+        setAnnouncementPopup(null);
         showToastMessage(reason, 'warning');
       };
       const teacherAction = async (create) => {
@@ -165,10 +177,11 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
           sessionStorage.removeItem('session_code');
           setIsLoggedIn(false);
           if (create) {
-            const result = await backend.createSession();
+            const result = await backend.createSession(problemSetId);
             showToastMessage(`수업을 개설했습니다. 코드: ${result.code}`, 'success');
           }
           setIsTeacher(true);
+          await loadClassSessions();
           setShowTeacherModal(false);
           setTeacherPw('');
           await fetchDashboard();
@@ -181,11 +194,12 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
         try {
           await backend.logoutTeacher();
           setIsTeacher(false);
+          setClassSessions([]);
           setDashboard(await backend.getDashboard());
         } catch (error) { reportError(error); }
       };
-      const confirmAction = (title, message, action) => setConfirmDialog({
-        title, message, isBlockSubmit: false,
+      const confirmAction = (title, message, action, options = {}) => setConfirmDialog({
+        title, message, isBlockSubmit: false, ...options,
         onConfirm: async () => {
           if (busy) return;
           setBusy(true);
@@ -196,8 +210,29 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       });
       const handleEndSession = () => confirmAction('수업 마침 확인', '수업을 종료하면 학생은 더 이상 입력하거나 제출할 수 없습니다. 수업을 마치시겠습니까?', async () => {
         await backend.endSession();
+        await loadClassSessions();
         showToastMessage('수업을 종료했습니다.', 'success');
       });
+      const handleDownloadResults = async sessionId => {
+        try {
+          const results = await backend.getSessionResults(sessionId);
+          const count = results.session.problem_set_id === problemSetId || results.session.problem_set_id === 'propositions-v1'
+            ? problemsData.length
+            : results.students.find(student => student.submission)?.submission.problem_count || 13;
+          downloadResultsCsv(results, count);
+          showToastMessage('수업 결과 CSV를 다운로드했습니다.', 'success');
+        } catch (error) { reportError(error); }
+      };
+      const handleDeletePastSession = classSession => confirmAction(
+        '이전 수업 자료 영구 삭제',
+        `${new Date(classSession.created_at).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })} · ${classSession.code} 수업의 학생, 답안, 제출 결과, 질문, 아이디어, 개념학습 기록을 모두 삭제합니다. 복구할 수 없습니다. 필요한 CSV를 먼저 다운로드하셨나요?`,
+        async () => {
+          await backend.deleteSession(classSession.id);
+          await loadClassSessions();
+          showToastMessage('선택한 이전 수업 자료를 삭제했습니다.', 'success');
+        },
+        { destructive: true, confirmText: '영구 삭제' },
+      );
       const handleSubmissionDeadline = () => {
         const closing = !dashboard.isSubmissionClosed;
         confirmAction(closing ? '최종 제출 마감' : '최종 제출 재개', closing ? '최종 제출과 재제출을 마감하시겠습니까?' : '최종 제출을 다시 허용하시겠습니까?', async () => {
@@ -217,12 +252,17 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       const handleLogin = async (event) => {
         event.preventDefault();
         if (busy) return;
-        const name = studentName.trim(), code = inputCode.trim();
+        const code = inputCode.trim();
+        const identity = Object.fromEntries(Object.entries(studentIdentity).map(([key, value]) => [key, Number(value)]));
         if (!/^\d{6}$/.test(code)) return showToastMessage('6자리 수업 코드를 입력해주세요.', 'warning');
-        if (!name) return showToastMessage('학번과 이름을 입력해주세요.', 'warning');
+        if (!Number.isInteger(identity.grade) || identity.grade < 1 || identity.grade > 12 ||
+            !Number.isInteger(identity.classNumber) || identity.classNumber < 1 || identity.classNumber > 99 ||
+            !Number.isInteger(identity.studentNumber) || identity.studentNumber < 1 || identity.studentNumber > 99) return showToastMessage('학년·반·번호를 확인해주세요.', 'warning');
+        if (!guideChecks.every(Boolean)) return showToastMessage('활동 안내의 네 항목을 모두 확인해주세요.', 'warning');
         setBusy(true);
         try {
-          const context = await backend.joinClass(code, name);
+          const context = await backend.joinClass(code, identity);
+          const name = context.participant.name;
           // 같은 브라우저에서 저장하지 못했던 최신 입력도 복원합니다.
           let cached = null;
           try { cached = JSON.parse(localStorage.getItem(answerStorageKey(name, code)) || 'null'); } catch {}
@@ -230,7 +270,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
           restoreStudent(context.participant, answers || {}, context.submission);
           setSelectedIndex(0);
           await fetchDashboard();
-          showToastMessage(`${name}님 환영합니다!`, 'success');
+          showToastMessage(`${name} 학생, 환영합니다!`, 'success');
         } catch (error) { reportError(error); }
         finally { setBusy(false); }
       };
@@ -243,7 +283,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
           if (version === draftVersion.current) return fetchDashboard();
         });
       };
-      const handleStudentLeave = () => confirmAction('수업 나가기', '현재 입력을 저장하고 수업에서 나가시겠습니까?', async () => {
+      const handleStudentLeave = () => confirmAction('수업 나가기', '현재 입력을 서버에 저장한 뒤, 이 기기에 저장된 내 답안 캐시를 삭제하고 수업에서 나가시겠습니까? 서버의 제출 기록은 유지됩니다.', async () => {
         clearTimeout(draftTimer.current);
         await queueDraft();
         handleSessionTerminated('수업을 마쳤습니다. 수고하셨습니다!');
@@ -251,7 +291,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       const handleInputChange = (field, value) => {
         const current = answersRef.current[currentProblem.id] || { mode: '답', answer: '', question: '', idea: '' };
         const updated = { ...current, [field]: value };
-        updated.isComplete = Boolean(updated.answer?.trim());
+        updated.isComplete = isProblemComplete(currentProblem, updated);
         const answers = { ...answersRef.current, [currentProblem.id]: updated };
         answersRef.current = answers;
         draftVersion.current += 1;
@@ -281,8 +321,14 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
         if (busy) return;
         if (dashboard.isSubmissionClosed) return showToastMessage('교사가 최종 제출을 마감했습니다.', 'warning');
         if (hasSubmitted) return setShowEditReasonModal(true);
-        const count = problemsData.filter(problem => !userAnswers[problem.id]?.isComplete).length;
-        setConfirmDialog({ title: '최종 제출 확인', message: count ? `미응답 ${count}문항은 오답으로 처리됩니다. 현재 답안으로 제출하시겠습니까?` : '현재 답안을 제출하시겠습니까?', isBlockSubmit: false, onConfirm: () => performSubmission('') });
+        const unanswered = problemsData.filter(problem => !problem.choices.some(choice => choice.id === userAnswers[problem.id]?.answer)).length;
+        const incompleteBlanks = problemsData.filter(problem =>
+          problem.choices.some(choice => choice.id === userAnswers[problem.id]?.answer) && !isProblemComplete(problem, userAnswers[problem.id])).length;
+        const notice = [
+          unanswered && `답을 선택하지 않은 ${unanswered}문항은 오답 처리됩니다.`,
+          incompleteBlanks && `풀이 빈칸을 다 채우지 않은 ${incompleteBlanks}문항은 미완료로 표시되지만 선택한 답은 채점됩니다.`,
+        ].filter(Boolean).join(' ');
+        setConfirmDialog({ title: '최종 제출 확인', message: `${notice} 현재 답안으로 제출하시겠습니까?`.trim(), isBlockSubmit: false, onConfirm: () => performSubmission('') });
       };
       const performSubmission = async (reason = '') => {
         if (busy) return;
@@ -308,7 +354,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
         catch (error) { reportError(error); }
       };
 
-      const completedCount = Object.values(userAnswers).filter(a => a && a.isComplete).length;
+      const completedCount = problemsData.filter(problem => isProblemComplete(problem, userAnswers[problem.id])).length;
       const progressPercent = Math.round((completedCount / problemsData.length) * 100);
       const submittedCount = safeStudents.filter(s => s && s.status === '제출완료').length;
       const averageProgress = safeStudents.length
@@ -329,6 +375,19 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
         return { id: problem.id, title: problem.title, completed, pending: Math.max(0, safeStudents.length - completed), incorrect };
       }).sort((left, right) => right.pending - left.pending || right.incorrect - left.incorrect || left.id - right.id);
 
+      const announcementDialog = announcementPopup && (
+        <div role="dialog" aria-modal="true" aria-label="선생님 안내" className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border-2 border-indigo-200">
+            <h2 className="text-lg font-black text-indigo-950 mb-3">📣 선생님 안내</h2>
+            <p className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed mb-6">{announcementPopup.message}</p>
+            <button className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3" onClick={() => {
+              sessionStorage.setItem(announcementPopup.storageKey, announcementPopup.key);
+              setAnnouncementPopup(null);
+            }}>확인했습니다</button>
+          </div>
+        </div>
+      );
+
       if (booting) return <div className="p-12 text-center">수업 정보를 불러오고 있습니다…</div>;
       // 교사 전용 실시간 모니터링 화면
       if (isTeacher && !isLoggedIn) {
@@ -348,7 +407,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                   ) : (
                     <span className="bg-amber-500/20 border border-amber-400/50 text-amber-200 px-3 py-2 rounded-xl">진행 중인 수업 없음</span>
                   )}
-                  <button onClick={fetchDashboard} className="bg-indigo-800 hover:bg-indigo-700 px-3 py-2 rounded-xl">🔄 새로고침</button>
+                  <button onClick={() => { fetchDashboard(); loadClassSessions(); }} className="bg-indigo-800 hover:bg-indigo-700 px-3 py-2 rounded-xl">🔄 새로고침</button>
                   <button disabled={busy} onClick={handleCreateSession} className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded-xl">＋ 새 수업</button>
                   {dashboard.isSessionActive && (
                     <button onClick={handleEndSession} className="bg-rose-600 hover:bg-rose-500 px-3 py-2 rounded-xl">🛑 수업 종료</button>
@@ -359,6 +418,25 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
             </header>
 
             <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-4">
+              <section className="bg-white border rounded-2xl p-4 shadow-sm">
+                <h2 className="font-black text-sm mb-2">📁 수업별 자료 관리</h2>
+                <p className="text-xs text-slate-500 mb-3">진행 중·종료된 수업의 최신 최종 제출 결과를 CSV로 내려받습니다. 종료된 수업만 영구 삭제할 수 있으니 필요한 CSV를 먼저 보관하세요.</p>
+                {classSessions.length === 0 ? <p className="text-xs text-slate-500">아직 수업 기록이 없습니다.</p> : (
+                  <div className="space-y-2">
+                    {classSessions.map(classSession => (
+                      <div key={classSession.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 p-2">
+                        <span className="text-xs font-semibold text-slate-700">{new Date(classSession.created_at).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })} · {classSession.code} · {classSession.status === 'ACTIVE' ? '진행 중' : '종료'}</span>
+                        <div className="flex flex-wrap gap-2">
+                          <button onClick={() => handleDownloadResults(classSession.id)} className="text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 px-3 py-2 rounded-xl">CSV 다운로드</button>
+                          {classSession.status === 'ENDED' && (
+                            <button onClick={() => handleDeletePastSession(classSession)} disabled={busy} className="text-xs font-bold bg-rose-50 hover:bg-rose-100 disabled:opacity-50 text-rose-700 border border-rose-200 px-3 py-2 rounded-xl">이전 자료 삭제</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
               <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-white border rounded-2xl p-4 shadow-sm">
                   <div className="text-xs text-slate-500 font-bold">참여 학생</div>
@@ -512,7 +590,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                     <div className="max-h-72 overflow-y-auto p-3 space-y-2">
                       {safeQuestions.length === 0 && <div className="text-xs text-slate-400 text-center py-6">등록된 질문이 없습니다.</div>}
                       {safeQuestions.map(question => (
-                        <div key={question.id} className="bg-slate-50 border rounded-xl p-3 text-xs">
+                        <div key={question.id} className="bg-slate-50 border rounded-xl p-3 text-[13.333px]">
                           <div className="flex justify-between gap-2 mb-1">
                             <strong>{question.name}</strong>
                             <button onClick={() => handleDelete('질문_답글', question.id)} className="text-rose-500 font-bold">삭제</button>
@@ -543,7 +621,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                     <div className="max-h-64 overflow-y-auto p-3 space-y-2">
                       {safeIdeas.length === 0 && <div className="text-xs text-slate-400 text-center py-6">공유된 아이디어가 없습니다.</div>}
                       {safeIdeas.map(idea => (
-                        <div key={idea.id} className="flex gap-2 bg-amber-50 border border-amber-100 rounded-xl p-3 text-xs">
+                        <div key={idea.id} className="flex gap-2 bg-amber-50 border border-amber-100 rounded-xl p-3 text-[13.333px]">
                           <span className="bg-amber-400 text-amber-950 h-fit px-1.5 py-0.5 rounded font-black">Q{idea.problemId || '-'}</span>
                           <div className="flex-1"><strong>{idea.name}</strong><p className="mt-1 text-slate-700">{idea.content}</p></div>
                           <button onClick={() => handleDelete('아이디어_공유', idea.id)} className="text-rose-500 font-bold h-fit">✕</button>
@@ -588,13 +666,14 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <button onClick={() => setStudentMode('problem')} className="text-left bg-white hover:border-blue-400 hover:shadow-md border rounded-2xl p-6 transition group">
-                  <div className="text-3xl mb-3">🧩</div><h2 className="font-black text-lg text-slate-900 group-hover:text-blue-700">문제풀이</h2><p className="text-sm text-slate-600 mt-2 leading-relaxed">13개 문항을 풀고, 힌트·질문·아이디어 공유와 최종 제출을 진행합니다.</p><span className="inline-block mt-5 text-xs font-black text-blue-700">문제풀이 시작 →</span>
+          <div className="text-3xl mb-3">🧩</div><h2 className="font-black text-lg text-slate-900 group-hover:text-blue-700">문제풀이</h2><p className="text-sm text-slate-600 mt-2 leading-relaxed">명제와 증명 {problemsData.length}개 문항에서 4지선다 답과 풀이 빈칸을 작성하고, 질문·아이디어 공유와 최종 제출을 진행합니다.</p><span className="inline-block mt-5 text-xs font-black text-blue-700">문제풀이 시작 →</span>
                 </button>
                 <button onClick={() => setStudentMode('concept')} className="text-left bg-white hover:border-indigo-400 hover:shadow-md border rounded-2xl p-6 transition group">
-                  <div className="text-3xl mb-3">🔎</div><h2 className="font-black text-lg text-slate-900 group-hover:text-indigo-700">개념학습</h2><p className="text-sm text-slate-600 mt-2 leading-relaxed">벤다이어그램을 조작하며 집합의 핵심 개념을 익히고, 바로 확인 문제를 풉니다.</p><span className="inline-block mt-5 text-xs font-black text-indigo-700">개념학습 시작 →</span>
+          <div className="text-3xl mb-3">🔎</div><h2 className="font-black text-lg text-slate-900 group-hover:text-indigo-700">개념학습</h2><p className="text-sm text-slate-600 mt-2 leading-relaxed">명제와 조건 클릭형 빈칸 활동지를 열어 풀이를 단계별로 확인합니다.</p><span className="inline-block mt-5 text-xs font-black text-indigo-700">개념학습 시작 →</span>
                 </button>
               </div>
               <div className="text-center mt-5"><button onClick={handleStudentLeave} className="text-xs font-bold text-slate-500 hover:text-slate-800">수업 나가기</button></div>
+              {announcementDialog}
               <Notifications toast={toast} confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} busy={busy} />
             </div>
           </div>
@@ -602,14 +681,14 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
       }
 
       if (isLoggedIn && studentMode === 'concept') {
-        return <><ConceptLearning studentName={studentName} sessionCode={sessionCode} onBack={() => setStudentMode(null)} onFinish={handleConceptLearningFinish} /><Notifications toast={toast} busy={busy} /></>;
+        return <><PropositionConceptLearning onBack={() => setStudentMode(null)} onFinish={handleConceptLearningFinish} />{announcementDialog}<Notifications toast={toast} busy={busy} /></>;
       }
 
       // 시작/로그인 화면
       if (!isLoggedIn) {
         return (
           <div className="flex flex-col items-center justify-center min-h-screen bg-slate-200 p-4">
-            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border text-center relative">
+            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-xl w-full max-w-2xl border text-center relative">
               <div className="flex justify-between items-center mb-6 border-b pb-4">
                 <h1 className="text-xl font-black text-indigo-900 flex items-center gap-1.5">
                   📐 실시간 수학 클래스
@@ -638,7 +717,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                 </div>
               ) : (
                 <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl mb-6 text-xs text-amber-900 font-medium leading-relaxed">
-                  📢 선생님이 안내한 6자리 수업 코드와 학번·이름을 입력해주세요.
+                  📢 선생님이 안내한 6자리 수업 코드와 학년·반·번호를 입력해주세요.
                 </div>
               )}
 
@@ -655,22 +734,44 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                   />
                 </div>
 
-                <div>
-                  <label htmlFor="student-name" className="block text-xs font-bold text-slate-700 mb-1">학번 및 이름</label>
-                  <input
-                    type="text"
-                    placeholder="학번 및 이름 입력 (예: 10101 홍길동)"
-                    id="student-name" value={studentName}
-                    onChange={e => setStudentName(e.target.value)}
-                    className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    ['grade', '학년', '1~12'],
+                    ['classNumber', '반', '1~99'],
+                    ['studentNumber', '번호', '1~99'],
+                  ].map(([field, label, placeholder]) => (
+                    <div key={field}>
+                      <label htmlFor={`student-${field}`} className="block text-xs font-bold text-slate-700 mb-1">{label}</label>
+                      <input type="text" inputMode="numeric" autoComplete="off" id={`student-${field}`}
+                        placeholder={placeholder} value={studentIdentity[field]}
+                        onChange={event => setStudentIdentity(previous => ({ ...previous, [field]: event.target.value.replace(/[^0-9]/g, '').slice(0, 2) }))}
+                        className="w-full px-3 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                  ))}
                 </div>
 
+                <section className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mt-4 space-y-3" aria-label="수업 전 활동 안내">
+                  <h2 className="font-black text-base text-indigo-950">수학 수업 활동 안내</h2>
+                  <p className="text-xs text-slate-700">교과서 문제를 풀며 질문하고 풀이 아이디어를 함께 나눕니다. 각 항목을 읽고 확인해주세요.</p>
+                  {activityGuide.map((item, index) => (
+                    <label key={item.title} className="block bg-white border rounded-lg p-3 cursor-pointer">
+                      <span className="block font-bold text-sm text-slate-900">{index + 1}. {item.title}</span>
+                      <span className="block text-xs text-slate-700 mt-1 leading-relaxed">{item.body}</span>
+                      <span className="flex items-center gap-2 mt-2 text-xs font-bold text-indigo-800">
+                        <input type="checkbox" checked={guideChecks[index]}
+                          onChange={event => setGuideChecks(previous => previous.map((checked, position) => position === index ? event.target.checked : checked))}
+                          className="h-4 w-4" />
+                        {index + 1}번 안내를 확인했습니다.
+                      </span>
+                    </label>
+                  ))}
+                </section>
+
                 <button
-                  type="submit" disabled={busy}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-bold text-sm shadow transition mt-2"
+                  type="submit" disabled={busy || !guideChecks.every(Boolean)}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white py-3 rounded-xl font-bold text-sm shadow transition mt-2"
                 >
-                  🚀 수업 입장하기
+                  🚀 수업 시작하기
                 </button>
               </form>
             </div>
@@ -764,7 +865,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
             <div className="flex flex-wrap content-start gap-3 overflow-y-auto py-2 min-h-0 flex-1">
               {safeIdeas.length === 0 && <span className="text-xs text-indigo-300 italic">등록된 아이디어가 없습니다.</span>}
               {safeIdeas.map(item => (
-                <div key={item.id} className="max-w-full bg-indigo-900 border border-indigo-700 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 shadow-sm">
+                <div key={item.id} className="max-w-full bg-indigo-900 border border-indigo-700 px-3 py-1.5 rounded-lg text-[13.333px] flex items-center gap-2 shadow-sm">
                   {item.problemId && <span className="bg-yellow-400 text-indigo-950 font-extrabold px-1.5 py-0.5 rounded text-[10px]">Q{item.problemId}</span>}
                   <span className="text-yellow-300 font-bold">{item.name}:</span>
                   <span className="break-words min-w-0">{item.content}</span>
@@ -807,14 +908,20 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
             {/* 메인 작업 영역 */}
             <div className="col-span-12 lg:col-span-8 bg-white rounded-2xl border p-4 flex flex-col justify-between shadow-sm overflow-y-auto">
               <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-3 border-b">
+                  <span className="text-xs text-slate-600 font-bold">모든 문항을 확인한 뒤 최종 제출하세요. 미응답도 제출할 수 있습니다.</span>
+                  <button onClick={handleFinalSubmit} disabled={busy || dashboard.isSubmissionClosed} className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow transition">
+                    🚀 {hasSubmitted ? '수정된 답안 재제출하기' : '전체 답안 최종 제출하기'}
+                  </button>
+                </div>
                 {/* 문항 탭 */}
                 <div className="flex gap-1 border-b pb-2 mb-3 overflow-x-auto">
                   {problemsData.map((p, idx) => {
-                    const isComp = userAnswers[p.id]?.isComplete;
+                    const isComp = isProblemComplete(p, userAnswers[p.id]);
                     return (
                       <button
                         key={p.id}
-                        onClick={() => { setSelectedIndex(idx); setShowHint(false); }}
+                        onClick={() => { setSelectedIndex(idx); setShowHint(true); }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${selectedIndex === idx ? 'bg-blue-600 text-white shadow' : isComp ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                       >
                         Q{p.id} {isComp && '✓'}
@@ -840,13 +947,18 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                   )}
                 </div>
 
-                {/* 힌트 버튼 */}
+                {/* 문제은행의 풀이 빈칸은 정답을 공개하지 않고 학생 입력으로 보관합니다. */}
                 <button onClick={() => setShowHint(!showHint)} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-3 py-1 rounded-lg mb-3 transition">
-                  💡 {showHint ? '힌트 닫기' : '단계별 빈칸 힌트 보기'}
+                  💡 {showHint ? '풀이 빈칸 접기' : '풀이 빈칸 펼치기'}
                 </button>
                 {showHint && (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 font-mono whitespace-pre-wrap mb-3 leading-relaxed">
-                    <MathText as="div" text={formatHintText(currentProblem.hint)} />
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl mb-3 overflow-x-auto">
+                    <p className="text-xs font-bold text-amber-900 mb-2">풀이 빈칸을 모두 채우면 완료로 표시됩니다. 빈칸의 정오 여부는 자동 채점하지 않습니다.</p>
+                    <ProblemBlankActivity
+                      problem={currentProblem}
+                      values={userAnswers[currentProblem.id]?.blanks || {}}
+                      onChange={(id, value) => handleInputChange('blanks', { ...answersRef.current[currentProblem.id]?.blanks, [id]: value })}
+                    />
                   </div>
                 )}
 
@@ -866,31 +978,20 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                     ))}
                   </div>
 
-                  {/* 모든 문항의 객관식 선지는 답변 모드와 관계없이 항상 표시합니다. */}
+                  {/* 정답 번호는 Supabase 비공개 정답표와 비교합니다. */}
                   <div className="mb-3">
-                    <div className="font-semibold text-slate-600 mb-1.5 text-xs">📋 객관식 선지 선택:</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5">
-                      {(currentProblem.options || []).map((opt, oIdx) => {
-                        const isSelected = userAnswers[currentProblem.id]?.answer === opt;
-                        return (
-                          <button
-                            key={oIdx}
-                            type="button"
-                            onClick={() => handleInputChange('answer', opt)}
-                            className={`p-2 text-xs text-left rounded-lg border font-medium transition ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm font-bold'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-300'
-                            }`}
-                          >
-                            <MathText text={opt} />
-                          </button>
-                        );
-                      })}
+                    <div className="block font-semibold text-slate-600 mb-1.5 text-xs">✍️ 최종 답 선택</div>
+                    <div className="grid gap-2">
+                      {currentProblem.choices.map(choice => (
+                        <label key={choice.id} className={`flex items-start gap-2 p-2.5 border rounded-lg cursor-pointer ${userAnswers[currentProblem.id]?.answer === choice.id ? 'border-indigo-500 bg-indigo-50' : 'bg-white hover:bg-slate-50'}`}>
+                          <input type="radio" name={`answer-${currentProblem.id}`} value={choice.id}
+                            checked={userAnswers[currentProblem.id]?.answer === choice.id}
+                            onChange={() => handleInputChange('answer', choice.id)} className="mt-0.5" />
+                          <span>{choice.id}. {choice.text}</span>
+                        </label>
+                      ))}
                     </div>
-                    <div className="mt-2 text-[11px] text-slate-500">
-                      선택한 답: <strong className="text-indigo-700">{userAnswers[currentProblem.id]?.answer || '미선택'}</strong>
-                    </div>
+                    <p className="mt-2 text-[11px] text-slate-500">선택한 답만 자동 채점합니다. 풀이 빈칸이 남아 있어도 최종 제출은 가능합니다.</p>
                   </div>
 
                   {/* 입력 필드 */}
@@ -926,9 +1027,6 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                     📊 정오표 다시보기
                   </button>
                 ) : <div />}
-                <button onClick={handleFinalSubmit} disabled={busy || dashboard.isSubmissionClosed} className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold px-6 py-2.5 rounded-xl text-xs shadow transition">
-                  🚀 {hasSubmitted ? '수정된 답안 재제출하기' : '전체 답안 최종 제출하기'}
-                </button>
               </div>
             </div>
 
@@ -938,7 +1036,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
               <div className="flex-1 overflow-y-auto space-y-2 pr-1">
                 {safeQuestions.length === 0 && <div className="text-xs text-slate-400 text-center py-4">등록된 질문이 없습니다.</div>}
                 {safeQuestions.map(q => (
-                  <div key={q.id} className="p-2.5 bg-slate-50 border rounded-xl text-xs space-y-1">
+                  <div key={q.id} className="p-2.5 bg-slate-50 border rounded-xl text-[13.333px] space-y-1">
                     <div className="flex justify-between font-bold text-slate-500">
                       <span>{q.name}</span>
                       {isTeacher && <button onClick={() => handleDelete('질문_답글', q.id)} className="text-red-500 font-bold hover:underline">삭제</button>}
@@ -964,6 +1062,8 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
             </div>
           </main>
 
+          {announcementDialog}
+
           {/* 정오표 및 채점 결과 모달 */}
           {showResultModal && (
             <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -973,7 +1073,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                     <h3 className="font-extrabold text-base text-indigo-900 flex items-center gap-2">
                       🎯 최종 답안 정오표 및 채점 결과
                     </h3>
-                    <p className="text-xs text-slate-500">제출된 답안의 채점 결과입니다.</p>
+                    <p className="text-xs text-slate-500">제출된 답안의 정오와 점수입니다. 채점용 정답표는 이 화면에 제공하지 않습니다.</p>
                   </div>
                   <button onClick={() => setShowResultModal(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg">✕</button>
                 </div>
@@ -989,7 +1089,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                   {problemsData.map(p => {
                     const res = gradingData.results ? gradingData.results[p.id] : 'X';
                     const isO = res === 'O';
-                    const userAns = gradingData.answers?.[p.id]?.answer || '(미입력)';
+                    const userAns = selectedChoiceLabel(p, gradingData.answers?.[p.id]?.answer);
                     return (
                       <div key={p.id} className={`p-3 rounded-xl border flex items-center justify-between gap-2 ${isO ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'}`}>
                         <div className="flex-1 min-w-0">
@@ -999,7 +1099,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                           <div className="text-slate-600 truncate">
                             내 답안: <span className="font-semibold text-slate-900">{userAns}</span>
                           </div>
-                          {!isO && (
+                          {!isO && gradingData.correctAnswers?.[p.id] && (
                             <div className="text-rose-600 font-medium text-[11px] mt-0.5">
                               정답: {gradingData.correctAnswers?.[p.id] || "-"}
                             </div>
@@ -1110,7 +1210,7 @@ import factoryMap from './assets/unit1-q13-factory-map.svg?raw';
                 ) : (
                   <div className="flex gap-2 text-xs font-bold">
                     <button onClick={() => setConfirmDialog(null)} className="flex-1 bg-slate-200 hover:bg-slate-300 py-2 rounded-xl text-slate-700">취소</button>
-                    <button onClick={confirmDialog.onConfirm} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-xl">확인</button>
+                    <button onClick={confirmDialog.onConfirm} disabled={busy} className={`flex-1 text-white py-2 rounded-xl disabled:opacity-50 ${confirmDialog.destructive ? 'bg-rose-700 hover:bg-rose-800' : 'bg-blue-600 hover:bg-blue-700'}`}>{confirmDialog.confirmText || '확인'}</button>
                   </div>
                 )}
               </div>

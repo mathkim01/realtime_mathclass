@@ -3,10 +3,13 @@ import { demoAnswers } from '../data/demo-answers.js';
 
 export function createDemoBackend(storage = localStorage, tabStorage = sessionStorage) {
   const dataKey = 'math-classroom-demo-v1';
+  const historyKey = 'math-classroom-demo-history-v1';
   const roleKey = 'math-classroom-demo-role';
   const nameKey = 'math-classroom-demo-name';
   const read = () => JSON.parse(storage.getItem(dataKey) || 'null') || { ...emptyDashboard(), drafts: {}, concepts: [] };
   const write = data => storage.setItem(dataKey, JSON.stringify(data));
+  const readHistory = () => JSON.parse(storage.getItem(historyKey) || '[]');
+  const sessionRow = data => ({ id: data.id || data.activeSessionCode, code: data.activeSessionCode, created_at: data.created_at || new Date().toISOString(), ended_at: data.ended_at || null, status: data.isSessionActive ? 'ACTIVE' : 'ENDED' });
   const requireTeacher = () => { if (tabStorage.getItem(roleKey) !== 'teacher') throw new Error('교사 로그인 후 사용할 수 있습니다.'); };
   const requireStudent = () => {
     if (tabStorage.getItem(roleKey) !== 'student' || !read().isSessionActive) throw new Error('진행 중인 수업에 입장해주세요.');
@@ -30,17 +33,27 @@ export function createDemoBackend(storage = localStorage, tabStorage = sessionSt
     },
     async loginTeacher() { tabStorage.setItem(roleKey, 'teacher'); tabStorage.removeItem(nameKey); },
     async logoutTeacher() { tabStorage.removeItem(roleKey); },
-    async createSession() {
+    async createSession(problemSetId = 'unit1-v1') {
       requireTeacher();
+      if (problemSetId !== 'unit1-v1') throw new Error('명제 단원의 로컬 데모 자동 채점은 제공하지 않습니다. 실제 Supabase 연결을 사용해주세요.');
       const code = String(Math.floor(100000 + Math.random() * 900000));
-      write({ ...emptyDashboard(), activeSessionCode: code, isSessionActive: true, drafts: {}, concepts: [] });
+      const previous = read();
+      if (previous.activeSessionCode) {
+        previous.isSessionActive = false;
+        previous.ended_at ||= new Date().toISOString();
+        storage.setItem(historyKey, JSON.stringify([previous, ...readHistory()]));
+      }
+      write({ ...emptyDashboard(), id: crypto.randomUUID(), created_at: new Date().toISOString(), activeSessionCode: code, isSessionActive: true, drafts: {}, concepts: [] });
       return { code };
     },
-    async joinClass(code, name) {
+    async joinClass(code, identity) {
       const data = read();
       if (!data.isSessionActive || data.activeSessionCode !== code) throw new Error('유효하지 않거나 종료된 수업 코드입니다.');
+      const { grade, classNumber, studentNumber } = identity;
+      if (![grade, classNumber, studentNumber].every(Number.isInteger) || grade < 1 || grade > 12 || classNumber < 1 || classNumber > 99 || studentNumber < 1 || studentNumber > 99) throw new Error('학년·반·번호를 확인해주세요.');
+      const name = `${grade}학년 ${classNumber}반 ${studentNumber}번`;
       tabStorage.setItem(roleKey, 'student'); tabStorage.setItem(nameKey, name);
-      if (!data.students.some(row => row.name === name)) data.students.push({ name, solved: 0, progress: 0, status: '진행중', time: '방금 전' });
+      if (!data.students.some(row => row.name === name)) data.students.push({ name, grade, class_number: classNumber, student_number: studentNumber, solved: 0, progress: 0, status: '진행중', time: '방금 전' });
       write(data);
       return participation();
     },
@@ -51,6 +64,47 @@ export function createDemoBackend(storage = localStorage, tabStorage = sessionSt
       const { drafts, concepts, ...dashboard } = data;
       if (role !== 'teacher') dashboard.submissions = data.submissions.filter(row => row.name === tabStorage.getItem(nameKey));
       return dashboard;
+    },
+    async listSessions() {
+      requireTeacher();
+      const current = read();
+      return [current, ...readHistory()].filter(data => data.activeSessionCode).map(sessionRow);
+    },
+    async getSessionResults(sessionId) {
+      requireTeacher();
+      const data = [read(), ...readHistory()].find(item => (item.id || item.activeSessionCode) === sessionId);
+      if (!data) throw new Error('수업 기록을 찾을 수 없습니다.');
+      const submissions = new Map(data.submissions.map(row => [row.name, row]));
+      return {
+        session: sessionRow(data),
+        students: data.students.map(student => {
+          const submission = submissions.get(student.name);
+          return {
+            display_name: student.name, grade: student.grade, class_number: student.class_number,
+            student_number: student.student_number, solved: student.solved,
+            submission: submission ? {
+              answers: submission.answers, results: submission.results,
+              correct_count: Number(submission.score.split(' / ')[0]), problem_count: submission.total,
+              edit_reason: submission.reason, submitted_at: submission.submitted_at,
+            } : null,
+          };
+        }),
+      };
+    },
+    async deleteSession(sessionId) {
+      requireTeacher();
+      const current = read();
+      if ((current.id || current.activeSessionCode) === sessionId) {
+        if (current.isSessionActive) throw new Error('진행 중인 수업은 삭제할 수 없습니다. 먼저 수업을 종료해주세요.');
+        write({ ...emptyDashboard(), drafts: {}, concepts: [] });
+        return { success: true };
+      }
+      const history = readHistory();
+      const past = history.find(item => (item.id || item.activeSessionCode) === sessionId);
+      if (!past) throw new Error('수업 기록을 찾을 수 없습니다.');
+      if (past.isSessionActive) throw new Error('진행 중인 수업은 삭제할 수 없습니다. 먼저 수업을 종료해주세요.');
+      storage.setItem(historyKey, JSON.stringify(history.filter(item => (item.id || item.activeSessionCode) !== sessionId)));
+      return { success: true };
     },
     async saveDraft(answers) {
       const name = requireStudent(), data = read();
@@ -70,14 +124,14 @@ export function createDemoBackend(storage = localStorage, tabStorage = sessionSt
       const results = Object.fromEntries(Object.entries(demoAnswers).map(([id, answer]) => [id, answers[id]?.answer === answer ? 'O' : 'X']));
       const correctCount = Object.values(results).filter(value => value === 'O').length;
       const grade = { results, correctCount, correctAnswers: demoAnswers, answers: structuredClone(answers) };
-      const submission = { name, answers: structuredClone(answers), results, score: `${correctCount} / 13`, total: 13, reason, time: '방금 전', grade };
+      const submission = { name, answers: structuredClone(answers), results, score: `${correctCount} / 13`, total: 13, reason, time: '방금 전', submitted_at: new Date().toISOString(), grade };
       data.submissions = data.submissions.filter(row => row.name !== name).concat(submission);
       data.students.find(row => row.name === name).status = '제출완료';
       write(data); return grade;
     },
-    async endSession() { requireTeacher(); requireActive(); const data = read(); data.isSessionActive = false; write(data); },
+    async endSession() { requireTeacher(); requireActive(); const data = read(); data.isSessionActive = false; data.ended_at = new Date().toISOString(); write(data); },
     async setDeadline(closed) { requireTeacher(); requireActive(); const data = read(); data.isSubmissionClosed = closed; write(data); },
-    async announce(text) { requireTeacher(); requireActive(); const data = read(); data.announcement = text; data.announcementTime = '방금 전'; write(data); },
+    async announce(text) { requireTeacher(); requireActive(); const data = read(); data.announcement = text; data.announcementAt = new Date().toISOString(); data.announcementTime = '방금 전'; write(data); },
     async post(type, content, problemId) {
       const name = requireStudent(), data = read(), id = crypto.randomUUID();
       const key = type === 'idea' ? 'ideas' : 'questions';

@@ -1,4 +1,4 @@
-export const emptyDashboard = () => ({ students: [], ideas: [], questions: [], submissions: [], problemProgress: [], activeSessionCode: '', isSessionActive: false, isSubmissionClosed: false, announcement: '', announcementTime: '' });
+export const emptyDashboard = () => ({ students: [], ideas: [], questions: [], submissions: [], problemProgress: [], activeSessionCode: '', isSessionActive: false, isSubmissionClosed: false, announcement: '', announcementTime: '', announcementAt: '' });
 
 export function createSupabaseBackend(client) {
   let context = null;
@@ -63,12 +63,12 @@ export function createSupabaseBackend(client) {
       if (error) throw error;
       setContext(null);
     },
-    async createSession() {
-      const result = await rpc('create_class_session', { p_problem_set_id: 'unit1-v1' });
+    async createSession(problemSetId = 'propositions-choice-v1') {
+      const result = await rpc('create_class_session', { p_problem_set_id: problemSetId });
       setContext(await rpc('classroom_context', { p_session_id: result.sessionId }));
       return result;
     },
-    async joinClass(code, name) {
+    async joinClass(code, identity) {
       if (context?.role === 'teacher') throw new Error('교사 계정에서 로그아웃한 뒤 학생으로 입장해주세요.');
       const { data, error } = await client.auth.getSession();
       if (error) throw error;
@@ -76,7 +76,12 @@ export function createSupabaseBackend(client) {
         const result = await client.auth.signInAnonymously();
         if (result.error) throw new Error('학생 입장 인증에 실패했습니다. Supabase의 익명 로그인을 켜고 인증 요청 한도를 확인해주세요.');
       }
-      const result = await rpc('join_class_session', { p_code: code, p_display_name: name });
+      const result = await rpc('join_class_session', {
+        p_code: code,
+        p_grade: identity.grade,
+        p_class_number: identity.classNumber,
+        p_student_number: identity.studentNumber,
+      });
       return setContext(await rpc('classroom_context', { p_session_id: result.sessionId }));
     },
     leaveClass() { setContext(null); },
@@ -87,8 +92,43 @@ export function createSupabaseBackend(client) {
       for (const key of ['students', 'ideas', 'questions', 'submissions']) {
         data[key] = data[key].map(row => ({ ...row, time: formatTime(row.time) }));
       }
+      data.announcementAt = data.announcementTime || '';
       data.announcementTime = formatTime(data.announcementTime);
       return data;
+    },
+    async listSessions() {
+      if (context?.role !== 'teacher') throw new Error('교사 로그인 후 사용할 수 있습니다.');
+      const sessions = [];
+      for (let offset = 0; ; offset += 500) {
+        const { data, error } = await client.from('class_sessions')
+          .select('id,code,created_at,ended_at,status,problem_set_id')
+          .order('created_at', { ascending: false }).range(offset, offset + 499);
+        if (error) throw new Error(error.message);
+        sessions.push(...(data || []));
+        if (!data || data.length < 500) break;
+      }
+      return sessions;
+    },
+    async getSessionResults(sessionId) {
+      if (context?.role !== 'teacher') throw new Error('교사 로그인 후 사용할 수 있습니다.');
+      const { data: session, error: sessionError } = await client.from('class_sessions')
+        .select('id,code,created_at,ended_at,status,problem_set_id')
+        .eq('id', sessionId).single();
+      if (sessionError || !session) throw new Error('수업 기록을 찾을 수 없습니다.');
+      const { data: participants, error: participantsError } = await client.from('participants')
+        .select('id,display_name,grade,class_number,student_number,solved')
+        .eq('session_id', sessionId).order('display_name');
+      if (participantsError) throw new Error(participantsError.message);
+      const { data: submissions, error: submissionsError } = await client.from('submissions')
+        .select('participant_id,answers,results,correct_count,problem_count,edit_reason,submitted_at')
+        .eq('session_id', sessionId);
+      if (submissionsError) throw new Error(submissionsError.message);
+      const byParticipant = new Map((submissions || []).map(row => [row.participant_id, row]));
+      return { session, students: (participants || []).map(row => ({ ...row, submission: byParticipant.get(row.id) || null })) };
+    },
+    async deleteSession(sessionId) {
+      if (context?.role !== 'teacher') throw new Error('교사 로그인 후 사용할 수 있습니다.');
+      return rpc('delete_past_class_session', { p_session_id: sessionId });
     },
     saveDraft(answers) { return rpc('save_student_draft', { p_session_id: context?.sessionId, p_answers: answers }); },
     submit(answers, reason) { return rpc('submit_student_answers', { p_session_id: context?.sessionId, p_answers: answers, p_reason: reason }); },
